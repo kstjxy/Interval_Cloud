@@ -28,6 +28,7 @@
 #pragma once
 #include "Falcor.h"
 #include "Core/SampleApp.h"
+#include "passes/ClearPass.h"
 #include "passes/IntervalPass.h"
 #include "passes/DebugViewPass.h"
 
@@ -49,7 +50,9 @@ public:
     void onHotReload(HotReloadFlags reloaded) override;
 
 private:
+    // Track 2 target: mpClearPass stays trivial, but Interval/Debug will start consuming tet buffers once loaded.
     ref<RenderGraph> mpRenderGraph;
+    ref<ClearPass> mpClearPass;
     ref<IntervalPass> mpIntervalPass;
     ref<DebugViewPass> mpDebugViewPass;
 

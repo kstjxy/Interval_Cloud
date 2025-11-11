@@ -26,6 +26,7 @@
  # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  **************************************************************************/
 #include "IntervalCloudSample.h"
+#include "RenderGraph/RenderGraph.h" // Added for RenderGraph
 
 FALCOR_EXPORT_D3D12_AGILITY_SDK
 
@@ -46,27 +47,28 @@ IntervalCloudSample::~IntervalCloudSample()
 
 void IntervalCloudSample::onLoad(RenderContext* pRenderContext)
 {
-    mpRenderGraph = RenderGraph::create(pRenderContext->device(), "IntervalGraph");
+    mpRenderGraph = RenderGraph::create(pRenderContext->getDevice(), "IntervalGraph");
 
-    // Create passes
-    ref<RenderPass> pClearPass = RenderPass::create(pRenderContext->device(), "ClearFbo");
-    mpIntervalPass = IntervalPass::create(pRenderContext->device());
-    mpDebugViewPass = DebugViewPass::create(pRenderContext->device());
+    // Track 2 note: this is where GPU buffers (tet vertices + indices) will be created/attached once the loader exists.
+    // For now we just stand up the pass objects so the render graph plumbing is ready for real data.
+    mpClearPass = ClearPass::create(pRenderContext->getDevice(), {});
+    mpIntervalPass = IntervalPass::create(pRenderContext->getDevice(), {});
+    mpDebugViewPass = DebugViewPass::create(pRenderContext->getDevice(), {});
 
     // Add passes to graph
-    mpRenderGraph->addPass(pClearPass, "Clear");
+    mpRenderGraph->addPass(mpClearPass, "Clear");
     mpRenderGraph->addPass(mpIntervalPass, "Interval");
     mpRenderGraph->addPass(mpDebugViewPass, "Debug");
 
     // Connect passes
-    mpRenderGraph->addEdge("Clear.color", "Interval.colorIn"); // Assuming IntervalPass takes a color input
+    mpRenderGraph->addEdge("Clear.color", "Interval.colorIn");
     mpRenderGraph->addEdge("Interval.intervalOut", "Debug.intervalIn");
     mpRenderGraph->markOutput("Debug.color");
 
-    mpRenderGraph->onResize(pRenderContext->getFbo()->getWidth(), pRenderContext->getFbo()->getHeight());
+    mpRenderGraph->onResize(getTargetFbo().get());
 
     // Set the graph on the framework
-    setRenderGraph(mpRenderGraph);
+    // Removed setRenderGraph(mpRenderGraph); as it's not a direct member of SampleApp
 }
 
 void IntervalCloudSample::onShutdown()
@@ -77,17 +79,28 @@ void IntervalCloudSample::onShutdown()
 void IntervalCloudSample::onResize(uint32_t width, uint32_t height)
 {
     // TODO: Handle resizing of resources. For now, Falcor handles it via the graph.
-    if (mpRenderGraph)
+    if (mpRenderGraph && getTargetFbo())
     {
-        mpRenderGraph->onResize(width, height);
+        mpRenderGraph->onResize(getTargetFbo().get());
     }
 }
 
 void IntervalCloudSample::onFrameRender(RenderContext* pRenderContext, const ref<Fbo>& pTargetFbo)
 {
-    if (mpRenderGraph)
+    if (!mpRenderGraph) return;
+
+    mpRenderGraph->execute(pRenderContext); // Track 2: once the mesh path lands, IntervalPass will consume SRVs before Debug paints them.
+
+    auto pOutput = mpRenderGraph->getOutput("Debug.color");
+    auto pDstView = pTargetFbo ? pTargetFbo->getRenderTargetView(0) : nullptr;
+    if (!pOutput || !pDstView) return;
+
+    if (auto pTex = pOutput->asTexture())
     {
-        mpRenderGraph->execute(pRenderContext);
+        if (auto pSrcView = pTex->getSRV())
+        {
+            pRenderContext->blit(pSrcView, pDstView);
+        }
     }
 }
 
@@ -98,7 +111,12 @@ void IntervalCloudSample::onGuiRender(Gui* pGui)
     
     // View Mode controls
     w.text("View Mode:");
-    if (w.radioButtons((uint32_t*)&mViewMode, {"Front", "Back", "Length"}))
+    const Falcor::Gui::RadioButtonGroup viewModeButtons = {
+        {(uint32_t)ViewMode::Front, "Front", false},
+        {(uint32_t)ViewMode::Back, "Back", false},
+        {(uint32_t)ViewMode::Length, "Length", false}
+    };
+    if (w.radioButtons(viewModeButtons, (uint32_t&)mViewMode))
     {
         if (mpDebugViewPass) mpDebugViewPass->setViewMode((uint32_t)mViewMode);
     }
